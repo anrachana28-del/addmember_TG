@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Telegram Transfer Dashboard</title>
+<style>
+body { margin:0; font-family: Arial, sans-serif; background:#121212; color:#fff; transition: background 0.3s, color 0.3s; }
+body.light-mode { background:#f4f4f4; color:#222; }
+header { display:flex; justify-content:space-between; align-items:center; background:#1e1e1e; padding:15px; }
+body.light-mode header { background:#ddd; color:#222; }
+button { background:#9A0FBD; color:#fff; border:none; border-radius:6px; padding:8px 12px; cursor:pointer; transition:0.3s; }
+button:hover { background:#7b099a; }
+.container { max-width:950px; margin:30px auto; background:#1e1e1e; padding:20px; border-radius:10px; }
+body.light-mode .container { background:#fff; color:#222; }
+input, select { width:100%; padding:10px; border:none; border-radius:5px; margin:5px 0; background:#2c2c2c; color:#fff; }
+body.light-mode input, body.light-mode select { background:#e0e0e0; color:#222; }
+.progress { width:100%; height:20px; background:#333; border-radius:5px; margin:10px 0; }
+.progress-bar { width:0%; height:100%; background:#9A0FBD; text-align:center; font-size:12px; color:#fff; border-radius:5px; transition:0.3s; }
+.table-container { max-height:350px; overflow-y:auto; border:1px solid #444; margin-top:10px; border-radius:5px; }
+table { width:100%; border-collapse:collapse; }
+th, td { padding:8px; border-bottom:1px solid #444; text-align:left; }
+tr:nth-child(even){background:#242424;}
+.success { background:#1e88e5; color:#fff; }
+.failed { background:#e53935; color:#fff; }
+#loginSection, #registerSection { display:none; }
+#searchBox { margin-top:10px; padding:8px; border-radius:5px; border:none; background:#2c2c2c; color:#fff; }
+.account-card { border:1px solid #555; padding:10px; border-radius:5px; margin-bottom:10px; background:#242424; }
+.account-card button { margin-right:5px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Telegram Transfer Dashboard</h1>
+  <div>
+    <button id="loginBtn">Login</button>
+    <button id="logoutBtn" style="display:none;">Logout</button>
+    <button id="themeBtn">Light Mode</button>
+  </div>
+</header>
+
+<!-- Login -->
+<div class="container" id="loginSection">
+  <h2>Login</h2>
+  <input id="loginEmail" type="email" placeholder="Email">
+  <input id="loginPassword" type="password" placeholder="Password">
+  <button onclick="login()">Login</button>
+  <p>Don’t have an account? <a href="#" onclick="showRegister()">Register</a></p>
+</div>
+
+<!-- Register -->
+<div class="container" id="registerSection">
+  <h2>Register</h2>
+  <input id="registerEmail" type="email" placeholder="Email">
+  <input id="registerPassword" type="password" placeholder="Password">
+  <button onclick="register()">Register</button>
+  <p>Already have an account? <a href="#" onclick="showLogin()">Login</a></p>
+</div>
+
+<!-- Dashboard -->
+<div class="container" id="dashboard" style="display:none;">
+  <h2>Account Management</h2>
+  <form id="addAccountForm">
+    <input id="apiId" placeholder="API ID" required>
+    <input id="apiHash" placeholder="API Hash" required>
+    <input id="phone" placeholder="Phone number (e.g. +855...)" required>
+    <button type="submit">Add Account</button>
+  </form>
+
+  <div id="accountsContainer"></div>
+
+  <hr>
+  <h2>Group Transfer</h2>
+  <label>Source Group</label>
+  <select id="sourceGroup"></select>
+
+  <label>Target Group</label>
+  <select id="targetGroup"></select>
+
+  <label>Max Members to Add</label>
+  <input id="maxMembers" type="number" placeholder="e.g. 100">
+
+  <input id="searchBox" type="text" placeholder="Search members...">
+
+  <div class="progress"><div id="progressBar" class="progress-bar">0%</div></div>
+  <div id="accountCount">Total: 0 | Added: 0 ✅ | Failed: 0 ❌</div>
+
+  <button onclick="startTransfer()">Start Transfer</button>
+  <button onclick="pauseTransfer()">Pause</button>
+  <button onclick="resumeTransfer()">Resume</button>
+  <button onclick="retryFailed()">Retry Failed</button>
+  <button onclick="exportCSV()">Export CSV</button>
+
+  <div class="table-container">
+    <table id="resultTable">
+      <thead><tr><th>No</th><th>Member</th><th>Status</th><th>Action</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Firebase -->
+<script src="https://www.gstatic.com/firebasejs/11.0.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/11.0.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/11.0.1/firebase-firestore-compat.js"></script>
+
+<script>
+const firebaseConfig = {
+  apiKey: "AIzaSyBmr63gYP8ExVdndDZzO96tmlPAtf36kpY",
+  authDomain: "addmember-333c2.firebaseapp.com",
+  projectId: "addmember-333c2",
+  storageBucket: "addmember-333c2.firebasestorage.app",
+  messagingSenderId: "71092387793",
+  appId: "1:71092387793:web:8b978d2916e380d5a9eaf0",
+  measurementId: "G-N9ZLD2F29M"
+};
+
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.firestore();
+
+let currentUser = null;
+let isPaused = false;
+let transferQueue = [];
+let currentIndex = 0;
+
+// === AUTH ===
+auth.onAuthStateChanged(user => {
+  if (user) {
+    currentUser = user;
+    document.getElementById("dashboard").style.display = "block";
+    document.getElementById("loginSection").style.display = "none";
+    document.getElementById("registerSection").style.display = "none";
+    document.getElementById("loginBtn").style.display = "none";
+    document.getElementById("logoutBtn").style.display = "inline-block";
+    loadAccounts();
+  } else {
+    document.getElementById("dashboard").style.display = "none";
+    document.getElementById("loginSection").style.display = "block";
+    document.getElementById("loginBtn").style.display = "inline-block";
+    document.getElementById("logoutBtn").style.display = "none";
+  }
+});
+
+function showRegister(){ document.getElementById("loginSection").style.display="none"; document.getElementById("registerSection").style.display="block"; }
+function showLogin(){ document.getElementById("loginSection").style.display="block"; document.getElementById("registerSection").style.display="none"; }
+async function register(){ await auth.createUserWithEmailAndPassword(registerEmail.value,registerPassword.value); }
+async function login(){ await auth.signInWithEmailAndPassword(loginEmail.value,loginPassword.value); }
+function logout(){ auth.signOut(); }
+logoutBtn.onclick = logout;
+
+// === THEME TOGGLE ===
+themeBtn.onclick = () => {
+  document.body.classList.toggle("light-mode");
+  themeBtn.textContent = document.body.classList.contains("light-mode") ? "Dark Mode" : "Light Mode";
+};
+
+// === ADD ACCOUNT ===
+addAccountForm.addEventListener("submit", async (e)=>{
+  e.preventDefault();
+  const apiId = apiIdInput.value.trim();
+  const apiHash = apiHashInput.value.trim();
+  const phone = phoneInput.value.trim();
+  if(!apiId || !apiHash || !phone) return alert("Please fill all fields!");
+  await db.collection("accounts").add({userId:currentUser.uid, apiId, apiHash, phone, createdAt:Date.now()});
+  addAccountForm.reset();
+  loadAccounts();
+});
+
+async function loadAccounts(){
+  const container=document.getElementById("accountsContainer");
+  container.innerHTML="";
+  const snap=await db.collection("accounts").where("userId","==",currentUser.uid).get();
+  snap.forEach(doc=>{
+    const d=doc.data();
+    const div=document.createElement("div");
+    div.className="account-card";
+    div.innerHTML=`<b>${d.phone}</b><br>API ID: ${d.apiId}<br>API Hash: ${d.apiHash}<br>
+      <button onclick="editAccount('${doc.id}','${d.apiId}','${d.apiHash}','${d.phone}')">Edit</button>
+      <button onclick="deleteAccount('${doc.id}')">Delete</button>`;
+    container.appendChild(div);
+  });
+}
+
+async function editAccount(id, apiId, apiHash, phone){
+  const newPhone = prompt("Edit phone:", phone) || phone;
+  await db.collection("accounts").doc(id).update({phone:newPhone});
+  loadAccounts();
+}
+
+async function deleteAccount(id){
+  if(confirm("Delete this account?")){
+    await db.collection("accounts").doc(id).delete();
+    loadAccounts();
+  }
+}
+
+// === SIMULATION ===
+async function startTransfer(){
+  const total = parseInt(maxMembers.value)||50;
+  const resultTable=document.querySelector("#resultTable tbody");
+  const progressBar=document.getElementById("progressBar");
+  const accountCount=document.getElementById("accountCount");
+  resultTable.innerHTML="";
+  transferQueue = Array.from({length: total}, (_,i)=>`Member ${i+1}`);
+  currentIndex=0;
+  let added=0, failed=0;
+
+  async function processQueue(){
+    if(currentIndex>=transferQueue.length){ alert("Transfer completed!"); return; }
+    if(isPaused){ setTimeout(processQueue, 200); return; }
+    const member=transferQueue[currentIndex];
+    await new Promise(r=>setTimeout(r,100));
+    const success=Math.random()>0.2;
+    const tr=document.createElement("tr");
+    tr.className=success?"success":"failed";
+    tr.innerHTML=`<td>${currentIndex+1}</td><td>${member}</td><td>${success?"Added":"Failed"}</td><td><button onclick="retryRow(this)">Retry</button></td>`;
+    resultTable.appendChild(tr);
+    if(success) added++; else failed++;
+    const percent=Math.round(((currentIndex+1)/transferQueue.length)*100);
+    progressBar.style.width=percent+"%"; progressBar.textContent=percent+"%";
+    accountCount.innerHTML=`Total: ${transferQueue.length} | Added: ${added} ✅ | Failed: ${failed} ❌`;
+    currentIndex++; processQueue();
+  }
+  processQueue();
+}
+function pauseTransfer(){ isPaused=true; }
+function resumeTransfer(){ isPaused=false; }
+function retryFailed(){
+  document.querySelectorAll("#resultTable tbody tr.failed").forEach(r=>{r.className="success";r.children[2].textContent="Added";});
+}
+function retryRow(btn){ const row=btn.closest("tr"); row.className="success"; row.children[2].textContent="Added"; }
+
+// === CSV EXPORT ===
+function exportCSV(){
+  let csv="No,Member,Status\n";
+  document.querySelectorAll("#resultTable tbody tr").forEach(r=>{
+    csv+=Array.from(r.children).slice(0,3).map(c=>c.textContent).join(",")+"\n";
+  });
+  const blob=new Blob([csv],{type:"text/csv"});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a"); a.href=url; a.download="transfer_results.csv"; a.click();
+}
+
+// === SEARCH FILTER ===
+searchBox.addEventListener("input",e=>{
+  const t=e.target.value.toLowerCase();
+  document.querySelectorAll("#resultTable tbody tr").forEach(r=>{
+    const name=r.children[1].textContent.toLowerCase();
+    const st=r.children[2].textContent.toLowerCase();
+    r.style.display=(name.includes(t)||st.includes(t))?"":"none";
+  });
+});
+</script>
+</body>
+</html>
