@@ -1,2 +1,2 @@
-flask==2.3.6
 telethon==1.29.0
+firebase-admin==6.1.0
